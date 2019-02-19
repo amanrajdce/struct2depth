@@ -185,6 +185,7 @@ def _run_inference(output_dir=None,
         # Read image and run inference.
         if inference_mode == INFERENCE_MODE_SINGLE:
           if inference_crop == INFERENCE_CROP_NONE:
+            print(im_files[i])
             im = util.load_image(im_files[i], resize=(img_width, img_height))
           elif inference_crop == INFERENCE_CROP_CITYSCAPES:
             im = util.crop_cityscapes(util.load_image(im_files[i]),

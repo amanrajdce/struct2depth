@@ -203,6 +203,8 @@ def train(train_model, pretrained_ckpt, imagenet_ckpt, checkpoint_dir,
   saver = tf.train.Saver(vars_to_save, max_to_keep=MAX_TO_KEEP)
   sv = tf.train.Supervisor(logdir=checkpoint_dir, save_summaries_secs=0,
                            saver=None)
+  #gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.933)
+  #config = tf.ConfigProto(gpu_options=gpu_options)
   config = tf.ConfigProto()
   config.gpu_options.allow_growth = True
   with sv.managed_session(config=config) as sess:
