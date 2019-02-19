@@ -1,4 +1,4 @@
 ./models
-./__pycache__
+./*pycache*
 ./experiment
 ./results
