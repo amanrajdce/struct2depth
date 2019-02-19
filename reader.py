@@ -16,6 +16,8 @@
 
 """Reads data that is produced by dataset/gen_data.py."""
 
+# This script needs to be modified for adding semantic as an additional input
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
