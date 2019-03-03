@@ -25,12 +25,12 @@ def compute_overlap(mask1, mask2):
     # Use IoU here.
     return np.sum(mask1 & mask2)/np.sum(mask1 | mask2)
 
-def align(seg_img1, seg_img2, seg_img3, threshold_same=0.5):
+def align(seg_img1, seg_img2, seg_img3, threshold_same=0.3):
     res_img1 = np.zeros_like(seg_img1)
     res_img2 = np.zeros_like(seg_img2)
     res_img3 = np.zeros_like(seg_img3)
-    remaining_objects2 = list(np.unique(seg_img2.flatten()))
-    remaining_objects3 = list(np.unique(seg_img3.flatten()))
+    remaining_objects2 = list(np.unique(seg_img2))
+    remaining_objects3 = list(np.unique(seg_img3))
     for seg_id in np.unique(seg_img1):
         # See if we can find correspondences to seg_id in seg_img2.
         max_overlap2 = float('-inf')
@@ -40,7 +40,9 @@ def align(seg_img1, seg_img2, seg_img3, threshold_same=0.5):
             if overlap>max_overlap2:
                 max_overlap2 = overlap
                 max_segid2 = seg_id2
+        # if overlap greater than threshold, we got a match in frame2
         if max_overlap2 > threshold_same:
+            # now look for match for this id in frame3
             max_overlap3 = float('-inf')
             max_segid3 = -1
             for seg_id3 in remaining_objects3:
@@ -54,6 +56,7 @@ def align(seg_img1, seg_img2, seg_img3, threshold_same=0.5):
                 res_img3[seg_img3==max_segid3] = seg_id
                 remaining_objects2.remove(max_segid2)
                 remaining_objects3.remove(max_segid3)
+
     return res_img1, res_img2, res_img3
 
 def main(args):
@@ -62,11 +65,12 @@ def main(args):
         im_list = f.read().splitlines()
         f.close()
 
-    im_list = [args.data_dir + im.replace(" ", "/") + "-fseg.png" for im in im_list]
+    im_list = [args.data_dir + im.replace(" ", "/") + "-seg.png" for im in im_list]
     for idx, im in enumerate(im_list):
         print("processing: {}/{}".format(idx+1, len(im_list)))
         img = cv2.imread(im)
         h, w, _ = img.shape
+        w = w//3
         # split images 3 sequences
         img1 = img[:, :w, :]
         img2 = img[:, w:w*2, :]
@@ -76,7 +80,7 @@ def main(args):
         # put them back together
         res = np.concatenate((res1, res2, res3), axis=1)
         assert(res.shape == img.shape)
-        cv2.imwrite(im, res)
+        cv2.imwrite(im.replace("-seg.png", "-fseg.png"), res)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="arguments for image alignment")
