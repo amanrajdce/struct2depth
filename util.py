@@ -173,12 +173,16 @@ def get_vars_to_save_and_restore(ckpt=None):
              'global_scale_var' in v.op.name]
   model_vars.extend(bn_vars)
   model_vars = sorted(model_vars, key=lambda x: x.op.name)
+  # drop duplicates
+  model_vars = list(set(model_vars))
+
   mapping = {}
   if ckpt is not None:
     ckpt_var = tf.contrib.framework.list_variables(ckpt)
     ckpt_var_names = [name for (name, unused_shape) in ckpt_var]
     ckpt_var_shapes = [shape for (unused_name, shape) in ckpt_var]
     not_loaded = list(ckpt_var_names)
+
     for v in model_vars:
       if v.op.name not in ckpt_var_names:
         # For backward compatibility, try additional matching.

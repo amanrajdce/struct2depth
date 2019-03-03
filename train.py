@@ -39,6 +39,7 @@ gfile = tf.gfile
 MAX_TO_KEEP = 1000000  # Maximum number of checkpoints to keep.
 
 flags.DEFINE_string('data_dir', None, 'Preprocessed data.')
+flags.DEFINE_string('seg_data_dir', None, 'Preprocessed instance data.')
 flags.DEFINE_string('file_extension', 'png', 'Image data file extension.')
 flags.DEFINE_float('learning_rate', 0.0002, 'Adam learning rate.')
 flags.DEFINE_float('beta1', 0.9, 'Adam momentum.')
@@ -110,6 +111,7 @@ flags.DEFINE_string('master', 'local', 'Location of the session.')
 FLAGS = flags.FLAGS
 flags.mark_flag_as_required('data_dir')
 flags.mark_flag_as_required('checkpoint_dir')
+flags.mark_flag_as_required('seg_data_dir')
 
 
 def main(_):
@@ -156,6 +158,7 @@ def main(_):
     gfile.MakeDirs(FLAGS.checkpoint_dir)
 
   train_model = model.Model(data_dir=FLAGS.data_dir,
+                            seg_data_dir=FLAGS.seg_data_dir,
                             file_extension=FLAGS.file_extension,
                             is_training=True,
                             learning_rate=FLAGS.learning_rate,
@@ -224,11 +227,13 @@ def train(train_model, pretrained_ckpt, imagenet_ckpt, checkpoint_dir,
     steps_per_epoch = train_model.reader.steps_per_epoch
     step = 1
     while step <= train_steps:
+      print("step: {}".format(step))
       fetches = {
           'train': train_model.train_op,
           'global_step': train_model.global_step,
           'incr_global_step': train_model.incr_global_step
       }
+
       if step % summary_freq == 0:
         fetches['loss'] = train_model.total_loss
         fetches['summary'] = sv.summary_op

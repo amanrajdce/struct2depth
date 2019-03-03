@@ -40,6 +40,7 @@ class Model(object):
 
   def __init__(self,
                data_dir=None,
+               seg_data_dir=None,
                file_extension='png',
                is_training=True,
                learning_rate=0.0002,
@@ -72,6 +73,7 @@ class Model(object):
                size_constraint_weight=0.0,
                train_global_scale_var=True):
     self.data_dir = data_dir
+    self.seg_data_dir = seg_data_dir
     self.file_extension = file_extension
     self.is_training = is_training
     self.learning_rate = learning_rate
@@ -105,6 +107,7 @@ class Model(object):
     self.train_global_scale_var = train_global_scale_var
 
     logging.info('data_dir: %s', data_dir)
+    logging.info('seg_data_dir: %s', seg_data_dir)
     logging.info('file_extension: %s', file_extension)
     logging.info('is_training: %s', is_training)
     logging.info('learning_rate: %s', learning_rate)
@@ -145,7 +148,8 @@ class Model(object):
           constraint=lambda x: tf.clip_by_value(x, 0, np.infty))
 
     if self.is_training:
-      self.reader = reader.DataReader(self.data_dir, self.batch_size,
+      self.reader = reader.DataReader(self.data_dir, self.seg_data_dir,
+                                      self.batch_size,
                                       self.img_height, self.img_width,
                                       self.seq_length, NUM_SCALES,
                                       self.file_extension,
@@ -174,8 +178,10 @@ class Model(object):
 
   def build_inference_for_training(self):
     """Invokes depth and ego-motion networks and computes clouds if needed."""
+    print("Started reading a batch")
     (self.image_stack, self.image_stack_norm, self.seg_stack,
      self.intrinsic_mat, self.intrinsic_mat_inv) = self.reader.read_data()
+    print("successfully read a batch of data")
     with tf.variable_scope('depth_prediction'):
       # Organized by ...[i][scale].  Note that the order is flipped in
       # variables in build_loss() below.
@@ -278,6 +284,7 @@ class Model(object):
             self.warped_seq[s].append(warped_image_i_1)
             self.egomotions_seq[s].append(egomotion_mat_i_1)
 
+          #print("inverse warping done for RGB images before object level motion handling")
           # Second, for every object in the segmentation mask, take its mask and
           # warp it according to the egomotion estimate. Then put a threshold to
           # binarize the warped result. Use this mask to mask out background and

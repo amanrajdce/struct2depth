@@ -17,12 +17,15 @@
 """Common utilities for data pre-processing, e.g. matching moving object across frames."""
 
 import numpy as np
+import cv2
+import argparse
+import sys
 
 def compute_overlap(mask1, mask2):
     # Use IoU here.
     return np.sum(mask1 & mask2)/np.sum(mask1 | mask2)
 
-def align(seg_img1, seg_img2, seg_img3, threshold_same=0.3):
+def align(seg_img1, seg_img2, seg_img3, threshold_same=0.5):
     res_img1 = np.zeros_like(seg_img1)
     res_img2 = np.zeros_like(seg_img2)
     res_img3 = np.zeros_like(seg_img3)
@@ -52,3 +55,42 @@ def align(seg_img1, seg_img2, seg_img3, threshold_same=0.3):
                 remaining_objects2.remove(max_segid2)
                 remaining_objects3.remove(max_segid3)
     return res_img1, res_img2, res_img3
+
+def main(args):
+    # read all the files
+    with open(args.data_dir + args.file + '.txt', 'r') as f:
+        im_list = f.read().splitlines()
+        f.close()
+
+    im_list = [args.data_dir + im.replace(" ", "/") + "-fseg.png" for im in im_list]
+    for idx, im in enumerate(im_list):
+        print("processing: {}/{}".format(idx+1, len(im_list)))
+        img = cv2.imread(im)
+        h, w, _ = img.shape
+        # split images 3 sequences
+        img1 = img[:, :w, :]
+        img2 = img[:, w:w*2, :]
+        img3 = img[:, w*2:w*3, :]
+        # align images
+        res1, res2, res3 = align(img1, img2, img3)
+        # put them back together
+        res = np.concatenate((res1, res2, res3), axis=1)
+        assert(res.shape == img.shape)
+        cv2.imwrite(im, res)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="arguments for image alignment")
+    parser.add_argument(
+        '--data_dir',
+        help="directory for generated sequence instance masks with ids",
+        required=True,
+        type=str
+    )
+    parser.add_argument(
+        '--file',
+        help="name of .txt file",
+        default="train",
+        type=str
+    )
+    args = parser.parse_args()
+    main(args)

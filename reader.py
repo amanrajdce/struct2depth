@@ -26,12 +26,14 @@ import os
 import random
 from absl import logging
 import tensorflow as tf
+import sys
 
 import util
 
 gfile = tf.gfile
 
-QUEUE_SIZE = 2000
+QUEUE_SIZE = 200
+#QUEUE_SIZE = 2000
 QUEUE_BUFFER = 3
 # See nets.encoder_resnet as reference for below input-normalizing constants.
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -44,10 +46,13 @@ FLIP_NONE = 'none'  # Always disables flipping.
 class DataReader(object):
   """Reads stored sequences which are produced by dataset/gen_data.py."""
 
-  def __init__(self, data_dir, batch_size, img_height, img_width, seq_length,
-               num_scales, file_extension, random_scale_crop, flipping_mode,
-               random_color, imagenet_norm, shuffle, input_file='train'):
+  def __init__(
+    self, data_dir, seg_data_dir, batch_size, img_height, img_width, seq_length,
+    num_scales, file_extension, random_scale_crop, flipping_mode, random_color,
+    imagenet_norm, shuffle, input_file='train'
+):
     self.data_dir = data_dir
+    self.seg_data_dir = seg_data_dir
     self.batch_size = batch_size
     self.img_height = img_height
     self.img_width = img_width
@@ -66,7 +71,9 @@ class DataReader(object):
     with tf.name_scope('data_loading'):
       with tf.name_scope('enqueue_paths'):
         seed = random.randint(0, 2**31 - 1)
-        self.file_lists = self.compile_file_list(self.data_dir, self.input_file)
+        self.file_lists = self.compile_file_list(
+            self.data_dir, self.seg_data_dir, self.input_file
+        )
         image_paths_queue = tf.train.string_input_producer(
             self.file_lists['image_file_list'], seed=seed,
             shuffle=self.shuffle,
@@ -89,6 +96,7 @@ class DataReader(object):
           seg_seq = tf.image.decode_jpeg(seg_contents, channels=3)
         elif self.file_extension == 'png':
           image_seq = tf.image.decode_png(image_contents, channels=3)
+          # possible change here for instance level masks
           seg_seq = tf.image.decode_png(seg_contents, channels=3)
 
       with tf.name_scope('load_intrinsics'):
@@ -288,9 +296,10 @@ class DataReader(object):
     im, seg, intrinsics = crop_randomly(im, seg, intrinsics, out_h, out_w)
     return im, seg, intrinsics
 
-  def compile_file_list(self, data_dir, split, load_pose=False):
+  def compile_file_list(self, data_dir, seg_data_dir, split, load_pose=False):
     """Creates a list of input files."""
     logging.info('data_dir: %s', data_dir)
+    logging.info('seg_data_dir: %s', seg_data_dir)
     with gfile.Open(os.path.join(data_dir, '%s.txt' % split), 'r') as f:
       frames = f.readlines()
       frames = [k.rstrip() for k in frames]
@@ -302,7 +311,7 @@ class DataReader(object):
         for i in range(len(frames))
     ]
     segment_file_list = [
-        os.path.join(data_dir, subfolders[i], frame_ids[i] + '-fseg.' +
+        os.path.join(seg_data_dir, subfolders[i], frame_ids[i] + '-fseg.' +
                      self.file_extension)
         for i in range(len(frames))
     ]
