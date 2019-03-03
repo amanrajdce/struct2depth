@@ -67,6 +67,7 @@ def main(args):
 
     im_list = [args.data_dir + im.replace(" ", "/") + "-seg.png" for im in im_list]
     for idx, im in enumerate(im_list):
+        print(im)
         print("processing: {}/{}".format(idx+1, len(im_list)))
         img = cv2.imread(im)
         h, w, _ = img.shape
