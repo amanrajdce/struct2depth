@@ -10,8 +10,8 @@ python train.py \
   --data_dir $data_dir \
   --seg_data_dir $seg_data_dir \
   --architecture resnet \
-  --batch_size 8 \
-  --summary_freq 1 \
+  --batch_size 4 \
+  --summary_freq 10 \
   --imagenet_norm true \
   --pretrained_ckpt $pretrained_ckpt \
   --learning_rate 0.0001

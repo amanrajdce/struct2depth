@@ -227,7 +227,6 @@ def train(train_model, pretrained_ckpt, imagenet_ckpt, checkpoint_dir,
     steps_per_epoch = train_model.reader.steps_per_epoch
     step = 1
     while step <= train_steps:
-      print("step: {}".format(step))
       fetches = {
           'train': train_model.train_op,
           'global_step': train_model.global_step,
