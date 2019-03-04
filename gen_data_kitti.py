@@ -34,7 +34,7 @@ WIDTH = 416
 HEIGHT = 128
 STEPSIZE = 1
 INPUT_DIR = '/mnt/1.9TB/kitti_raw'
-OUTPUT_DIR = '/mnt/1.9TB/struct2depth/KITTI_procesed/'
+OUTPUT_DIR = '/mnt/1.9TB/struct2depth/kitti_check/'
 
 
 def get_line(file, start):

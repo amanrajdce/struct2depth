@@ -1,8 +1,8 @@
-ckpt_dir="/viscompfs/users/amanraj/struct2depth/experiment"
-data_dir="/viscompfs/users/tedyu/kitti_processed/" # Set for KITTI
+ckpt_dir="/viscompfs/users/amanraj/struct2depth/training/original_from_ckpt"
+data_dir="/viscompfs/users/amanraj/data/kitti_processed/" # Set for KITTI
 seg_data_dir="/viscompfs/users/amanraj/data/kitti_eigen_instance/" # Set for KITTI
-imagenet_ckpt="/viscompfs/users/tedyu/struct2depth/resnet_pretrained/model.ckpt"
-#pretrained_ckpt="/home/amanraj/codes/models/research/struct2depth/models/model"
+imagenet_ckpt="/viscompfs/users/amanraj/struct2depth/resnet_pretrained/model.ckpt"
+pretrained_ckpt="/home/amanraj/codes/models/research/struct2depth/models/model"
 
 CUDA_VISIBLE_DEVICES=0 python train.py \
   --logtostderr \
@@ -12,8 +12,9 @@ CUDA_VISIBLE_DEVICES=0 python train.py \
   --architecture resnet \
   --imagenet_ckpt $imagenet_ckpt \
   --batch_size 4 \
-  --summary_freq 1 \
+  --summary_freq 100
   #--pretrained_ckpt $pretrained_ckpt
   #--imagenet_norm true \
-
-  #0000004451-fseg.png;
+  #--learning_rate 0.0002
+  #--handle_motion=False \
+  #--size_constraint_weight=0
