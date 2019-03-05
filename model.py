@@ -40,7 +40,9 @@ class Model(object):
 
   def __init__(self,
                data_dir=None,
-               seg_data_dir=None,
+               ins_data_dir=None,
+               sem_data_dir=None,
+               is_semantic=False,
                file_extension='png',
                is_training=True,
                learning_rate=0.0002,
@@ -73,7 +75,9 @@ class Model(object):
                size_constraint_weight=0.0,
                train_global_scale_var=True):
     self.data_dir = data_dir
-    self.seg_data_dir = seg_data_dir
+    self.ins_data_dir = ins_data_dir
+    self.sem_data_dir = sem_data_dir
+    self.is_semantic = is_semantic
     self.file_extension = file_extension
     self.is_training = is_training
     self.learning_rate = learning_rate
@@ -107,7 +111,9 @@ class Model(object):
     self.train_global_scale_var = train_global_scale_var
 
     logging.info('data_dir: %s', data_dir)
-    logging.info('seg_data_dir: %s', seg_data_dir)
+    logging.info('ins_data_dir: %s', ins_data_dir)
+    logging.info('sem_data_dir: %s', sem_data_dir)
+    logging.info('is_semantic: %s', is_semantic)
     logging.info('file_extension: %s', file_extension)
     logging.info('is_training: %s', is_training)
     logging.info('learning_rate: %s', learning_rate)
@@ -148,11 +154,11 @@ class Model(object):
           constraint=lambda x: tf.clip_by_value(x, 0, np.infty))
 
     if self.is_training:
-      self.reader = reader.DataReader(self.data_dir, self.seg_data_dir,
-                                      self.batch_size,
-                                      self.img_height, self.img_width,
-                                      self.seq_length, NUM_SCALES,
-                                      self.file_extension,
+      self.reader = reader.DataReader(self.data_dir, self.ins_data_dir,
+                                      self.sem_data_dir, self.is_semantic,
+                                      self.batch_size, self.img_height,
+                                      self.img_width, self.seq_length,
+                                      NUM_SCALES, self.file_extension,
                                       self.random_scale_crop,
                                       self.flipping_mode,
                                       self.random_color,
@@ -179,8 +185,15 @@ class Model(object):
   def build_inference_for_training(self):
     """Invokes depth and ego-motion networks and computes clouds if needed."""
     print("Started reading a batch")
-    (self.image_stack, self.image_stack_norm, self.seg_stack,
-     self.intrinsic_mat, self.intrinsic_mat_inv) = self.reader.read_data()
+    if self.is_semantic:
+        (self.image_stack, self.image_stack_norm, self.seg_stack,
+        self.intrinsic_mat, self.intrinsic_mat_inv, self.sem_stack) = \
+        self.reader.read_data()
+    else:
+        (self.image_stack, self.image_stack_norm, self.seg_stack,
+        self.intrinsic_mat, self.intrinsic_mat_inv) = \
+        self.reader.read_data()
+
     print("successfully read a batch of data")
     with tf.variable_scope('depth_prediction'):
       # Organized by ...[i][scale].  Note that the order is flipped in
@@ -196,7 +209,12 @@ class Model(object):
         self.cloud = {}
       for i in range(self.seq_length):
         image = self.image_stack_norm[:, :, :, 3 * i:3 * (i + 1)]
+        # if semantic available
+        if self.is_semantic:
+            sem_image = self.sem_stack[:, :, :, 19 * i:19 * (i+1)]
+            image = tf.concat([image, sem_image], axis=3)
 
+        logging.info('input tensor shape to dispnet: %s', util.info(image))
         multiscale_disps_i, disp_bottlenecks[i] = nets.disp_net(
             self.architecture, image, self.use_skip,
             self.weight_reg, True)

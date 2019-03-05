@@ -1,8 +1,8 @@
-ckpt_dir="/viscompfs/users/amanraj/struct2depth/training/original_from_ckpt"
+ckpt_dir="/viscompfs/users/amanraj/struct2depth/training/scratch_imgnetckpt"
 data_dir="/viscompfs/users/amanraj/data/kitti_processed/" # Set for KITTI
 seg_data_dir="/viscompfs/users/amanraj/data/kitti_eigen_instance/" # Set for KITTI
 imagenet_ckpt="/viscompfs/users/amanraj/struct2depth/resnet_pretrained/model.ckpt"
-pretrained_ckpt="/home/amanraj/codes/models/research/struct2depth/models/model"
+pretrained_ckpt="/viscompfs/users/amanraj/struct2depth/models/model"
 
 CUDA_VISIBLE_DEVICES=0 python train.py \
   --logtostderr \

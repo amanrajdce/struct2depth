@@ -39,7 +39,9 @@ gfile = tf.gfile
 MAX_TO_KEEP = 1000000  # Maximum number of checkpoints to keep.
 
 flags.DEFINE_string('data_dir', None, 'Preprocessed data.')
-flags.DEFINE_string('seg_data_dir', None, 'Preprocessed instance data.')
+flags.DEFINE_string('ins_data_dir', None, 'Preprocessed instance data.')
+flags.DEFINE_string('sem_data_dir', None, 'Preprocessed instance data.')
+flags.DEFINE_boolean('is_semantic', False, 'Use semantic segmenation in input.')
 flags.DEFINE_string('file_extension', 'png', 'Image data file extension.')
 flags.DEFINE_float('learning_rate', 0.0002, 'Adam learning rate.')
 flags.DEFINE_float('beta1', 0.9, 'Adam momentum.')
@@ -111,7 +113,7 @@ flags.DEFINE_string('master', 'local', 'Location of the session.')
 FLAGS = flags.FLAGS
 flags.mark_flag_as_required('data_dir')
 flags.mark_flag_as_required('checkpoint_dir')
-flags.mark_flag_as_required('seg_data_dir')
+flags.mark_flag_as_required('ins_data_dir')
 
 
 def main(_):
@@ -154,11 +156,16 @@ def main(_):
     # TODO(casser): Change ICP interface to take matrix instead of vector.
     raise ValueError('ICP is currently not supported.')
 
+  if FLAGS.is_semantic and not FLAGS.sem_data_dir:
+      raise ValueError('semantic input enabled expects path to semantic segmentaion')
+
   if not gfile.Exists(FLAGS.checkpoint_dir):
     gfile.MakeDirs(FLAGS.checkpoint_dir)
 
   train_model = model.Model(data_dir=FLAGS.data_dir,
-                            seg_data_dir=FLAGS.seg_data_dir,
+                            ins_data_dir=FLAGS.ins_data_dir,
+                            sem_data_dir=FLAGS.sem_data_dir,
+                            is_semantic=FLAGS.is_semantic,
                             file_extension=FLAGS.file_extension,
                             is_training=True,
                             learning_rate=FLAGS.learning_rate,
