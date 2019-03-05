@@ -1,8 +1,8 @@
 ckpt_dir="/mnt/1.9TB/struct2depth/experiment/training/original_from_ckpt"
 data_dir="/mnt/1.9TB/struct2depth/kitti_processed/" # Set for KITTI
 ins_data_dir="/mnt/1.9TB/struct2depth/kitti_eigen_instance/" # Set for KITTI
-imagenet_ckpt="/home/amanraj/codes/models/research/struct2depth/resnet_pretrained/model.ckpt"
-pretrained_ckpt="/home/amanraj/codes/models/research/struct2depth/models/model"
+imagenet_ckpt="/mnt/1.9TB/struct2depth/experiment/resnet_pretrained/model.ckpt"
+pretrained_ckpt="/mnt/1.9TB/struct2depth/experiment/checkpoint/model"
 
 python train.py \
   --logtostderr \
