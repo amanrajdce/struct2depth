@@ -1,5 +1,6 @@
+#!/bin/bash
 kitti_dir="/mnt/1.9TB/kitti_raw/" # Raw Kitti directory
-pred_dir="/mnt/1.9TB/struct2depth/experiment/training/semantic_from_scratch/prediction/"
+pred_dir="/mnt/1.9TB/struct2depth/experiment/checkpoint/prediction/"
 test_file_list="/mnt/1.9TB/kitti_raw/test_files_eigen.txt"
 
 python eval_depth.py \

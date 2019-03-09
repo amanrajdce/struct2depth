@@ -43,6 +43,8 @@ import fnmatch
 import tensorflow as tf
 import nets
 import util
+import cv2
+import sys
 
 gfile = tf.gfile
 
@@ -54,11 +56,15 @@ INFERENCE_MODE_TRIPLETS = 'triplets'  # Take image triplets as input.
 # Cityscapes, the car hood and more image content has been cropped in order
 # to fit aspect ratio, and remove static content from the images. This has to be
 # kept at inference time.
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_SD = (0.229, 0.224, 0.225)
 INFERENCE_CROP_NONE = 'none'
 INFERENCE_CROP_CITYSCAPES = 'cityscapes'
 
 
 flags.DEFINE_string('output_dir', None, 'Directory to store predictions.')
+flags.DEFINE_string('sem_data_dir', None, 'Preprocessed instance data.')
+flags.DEFINE_bool('is_semantic', False, 'Whether to use semantic in input')
 flags.DEFINE_string('file_extension', 'png', 'Image data file extension of '
                     'files provided with input_dir. Also determines the output '
                     'file format of depth prediction images.')
@@ -128,9 +134,11 @@ flags.mark_flag_as_required('model_ckpt')
 def _run_inference(output_dir=None,
                    file_extension='png',
                    depth=True,
+                   is_semantic=False,
                    egomotion=False,
                    model_ckpt=None,
                    input_dir=None,
+                   sem_data_dir=None,
                    input_list_file=None,
                    batch_size=1,
                    img_height=128,
@@ -154,6 +162,7 @@ def _run_inference(output_dir=None,
                                 architecture=architecture,
                                 imagenet_norm=imagenet_norm,
                                 use_skip=use_skip,
+                                is_semantic=is_semantic,
                                 joint_encoder=joint_encoder)
   vars_to_restore = util.get_vars_to_save_and_restore(model_ckpt)
   saver = tf.train.Saver(vars_to_restore)
@@ -165,8 +174,13 @@ def _run_inference(output_dir=None,
     logging.info('Predictions will be saved in %s.', output_dir)
 
     # Collect all images to run inference on.
-    im_files, basepath_in = collect_input_images(input_dir, input_list_file,
-                                                 file_extension)
+    im_files, basepath_in = collect_input_images(
+        input_dir, input_list_file, file_extension
+    )
+
+    # collect semantic segmentation images
+    if is_semantic:
+        sem_files = collect_semantic_images(sem_data_dir, input_list_file)
     if shuffle:
       logging.info('Shuffling data...')
       np.random.shuffle(im_files)
@@ -187,6 +201,16 @@ def _run_inference(output_dir=None,
           if inference_crop == INFERENCE_CROP_NONE:
             print(im_files[i])
             im = util.load_image(im_files[i], resize=(img_width, img_height))
+            if imagenet_norm:
+                im = (im - IMAGENET_MEAN) / IMAGENET_SD
+            if is_semantic:
+                print(sem_files[i])
+                sem = np.load(sem_files[i])
+                sem = cv2.resize(
+                    src=sem, dsize=(img_width, img_height), interpolation=cv2.INTER_NEAREST
+                )
+                sem = get_one_hot(sem, nb_classes=19)
+
           elif inference_crop == INFERENCE_CROP_CITYSCAPES:
             im = util.crop_cityscapes(util.load_image(im_files[i]),
                                       resize=(img_width, img_height))
@@ -195,13 +219,19 @@ def _run_inference(output_dir=None,
           im = im[:, img_width:img_width*2]
         if flip_for_depth:
           im = np.flip(im, axis=1)
+        if is_semantic:
+            im = np.concatenate((im, sem), axis=2)
+            #print("im shape: {}".format(im.shape))
+
         im_batch.append(im)
 
         if len(im_batch) == batch_size or i == len(im_files) - 1:
           # Call inference on batch.
           for _ in range(batch_size - len(im_batch)):  # Fill up batch.
-            im_batch.append(np.zeros(shape=(img_height, img_width, 3),
-                                     dtype=np.float32))
+            im_batch.append(
+                np.zeros(shape=(img_height, img_width, 22 if self.is_semantic else 3),
+                dtype=np.float32)
+            )
           im_batch = np.stack(im_batch, axis=0)
           est_depth = inference_model.inference_depth(im_batch, sess)
           if flip_for_depth:
@@ -211,7 +241,10 @@ def _run_inference(output_dir=None,
           for j in range(len(im_batch)):
             color_map = util.normalize_depth_for_display(
                 np.squeeze(est_depth[j]))
-            visualization = np.concatenate((im_batch[j], color_map), axis=0)
+
+            im_batch_j = (im_batch[j][:, :, :3] * IMAGENET_SD) + IMAGENET_MEAN
+
+            visualization = np.concatenate((im_batch_j, color_map), axis=0)
             # Save raw prediction and color visualization. Extract filename
             # without extension from full path: e.g. path/to/input_dir/folder1/
             # file1.png -> file1
@@ -343,6 +376,9 @@ def mask_image_stack(input_image_stack, input_seg_seq):
   background_stack = np.tile(background, [1, 1, input_image_stack.shape[3]])
   return np.multiply(input_image_stack, background_stack)
 
+def get_one_hot(targets, nb_classes):
+    res = np.eye(nb_classes, dtype='float32')[np.array(targets).reshape(-1)]
+    return res.reshape(list(targets.shape)+[nb_classes])
 
 def collect_input_images(input_dir, input_list_file, file_extension):
   """Collects all input images that are to be processed."""
@@ -356,6 +392,12 @@ def collect_input_images(input_dir, input_list_file, file_extension):
   im_files = [f for f in im_files if 'disp' not in f and '-seg' not in f and
               '-fseg' not in f and '-flip' not in f]
   return sorted(im_files), basepath_in
+
+def collect_semantic_images(sem_data_dir, input_list_file):
+    im_files = util.read_text_lines(input_list_file)
+    im_files = [os.path.join(sem_data_dir, f.replace(".png", ".npy")) for f in im_files]
+
+    return sorted(im_files)
 
 
 def create_output_dirs(im_files, basepath_in, output_dir):
@@ -394,6 +436,8 @@ def main(_):
   _run_inference(output_dir=FLAGS.output_dir,
                  file_extension=FLAGS.file_extension,
                  depth=FLAGS.depth,
+                 sem_data_dir=FLAGS.sem_data_dir,
+                 is_semantic=FLAGS.is_semantic,
                  egomotion=FLAGS.egomotion,
                  model_ckpt=FLAGS.model_ckpt,
                  input_dir=FLAGS.input_dir,

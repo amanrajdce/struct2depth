@@ -85,7 +85,8 @@ def normalize_depth_for_display(depth, pc=95, crop_percent=0, normalizer=None,
     disp /= normalizer
   else:
     disp /= (np.percentile(disp, pc) + 1e-6)
-  disp = np.clip(disp, 0, 1)
+
+  disp = np.clip(disp, 0, 1.5)
   disp = gray2rgb(disp, cmap=cmap)
   keep_h = int(disp.shape[0] * (1 - crop_percent))
   disp = disp[:keep_h]

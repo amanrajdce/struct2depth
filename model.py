@@ -23,6 +23,7 @@ from __future__ import print_function
 from absl import logging
 import numpy as np
 import tensorflow as tf
+import sys
 
 import nets
 import project
@@ -174,6 +175,7 @@ class Model(object):
 
     # At this point, the model is ready. Print some info on model params.
     util.count_parameters()
+    #sys.exit()
 
   def build_train_graph(self):
     self.build_inference_for_training()
@@ -784,10 +786,12 @@ class Model(object):
     """Builds depth model reading from placeholders."""
     with tf.variable_scope('depth_prediction'):
       input_image = tf.placeholder(
-          tf.float32, [self.batch_size, self.img_height, self.img_width, 3],
-          name='raw_input')
+          tf.float32, [self.batch_size, self.img_height, self.img_width,
+          22 if self.is_semantic else 3], name='raw_input')
+      """
       if self.imagenet_norm:
         input_image = (input_image - reader.IMAGENET_MEAN) / reader.IMAGENET_SD
+      """
       est_disp, _ = nets.disp_net(architecture=self.architecture,
                                   image=input_image,
                                   use_skip=self.use_skip,
