@@ -167,9 +167,7 @@ def disp_net(architecture, image, use_skip, weight_reg, is_training):
                                         weight_reg=weight_reg,
                                         use_skip=use_skip,
                                         skip_connections=skip_connections)
-  #print(multiscale_disps_i[0].get_shape())
-  #print(bottleneck[0].get_shape())
-  #sys.exit()
+
   return multiscale_disps_i, bottleneck
 
 
@@ -499,7 +497,6 @@ def _conv(x, filter_size, out_channel, stride, pad='SAME', input_q=None,
     if kernel not in tf.get_collection(WEIGHT_DECAY_KEY):
       tf.add_to_collection(WEIGHT_DECAY_KEY, kernel)
     conv = tf.nn.conv2d(x, kernel, [1, stride, stride, 1], pad)
-    print(x.get_shape())
   return conv
 
 
