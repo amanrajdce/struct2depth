@@ -250,3 +250,50 @@ def read_text_lines(filepath):
     lines = f.readlines()
   lines = [l.rstrip() for l in lines]
   return lines
+
+def pixel2cam(depth, pixel_coords, intrinsics, is_homogeneous=True):
+  """Transforms coordinates in the pixel frame to the camera frame.
+
+  Args:
+    depth: [batch, height, width]
+    pixel_coords: homogeneous pixel coordinates [batch, 3, height, width]
+    intrinsics: camera intrinsics [batch, 3, 3]
+    is_homogeneous: return in homogeneous coordinates
+  Returns:
+    Coords in the camera frame [batch, 3 (4 if homogeneous), height, width]
+  """
+  batch, height, width = depth.get_shape().as_list()
+  depth = tf.reshape(depth, [batch, 1, -1])
+  pixel_coords = tf.reshape(pixel_coords, [batch, 3, -1])
+  cam_coords = tf.matmul(tf.matrix_inverse(intrinsics), pixel_coords) * depth
+  if is_homogeneous:
+    ones = tf.ones([batch, 1, height*width])
+    cam_coords = tf.concat([cam_coords, ones], axis=1)
+  cam_coords = tf.reshape(cam_coords, [batch, -1, height, width])
+  return cam_coords
+
+def meshgrid(batch, height, width, is_homogeneous=True):
+  """Construct a 2D meshgrid.
+
+  Args:
+    batch: batch size
+    height: height of the grid
+    width: width of the grid
+    is_homogeneous: whether to return in homogeneous coordinates
+  Returns:
+    x,y grid coordinates [batch, 2 (3 if homogeneous), height, width]
+  """
+  x_t = tf.matmul(tf.ones(shape=tf.stack([height, 1])),
+                  tf.transpose(tf.expand_dims(
+                      tf.linspace(-1.0, 1.0, width), 1), [1, 0]))
+  y_t = tf.matmul(tf.expand_dims(tf.linspace(-1.0, 1.0, height), 1),
+                  tf.ones(shape=tf.stack([1, width])))
+  x_t = (x_t + 1.0) * 0.5 * tf.cast(width - 1, tf.float32)
+  y_t = (y_t + 1.0) * 0.5 * tf.cast(height - 1, tf.float32)
+  if is_homogeneous:
+    ones = tf.ones_like(x_t)
+    coords = tf.stack([x_t, y_t, ones], axis=0)
+  else:
+    coords = tf.stack([x_t, y_t], axis=0)
+  coords = tf.tile(tf.expand_dims(coords, 0), [batch, 1, 1, 1])
+  return coords

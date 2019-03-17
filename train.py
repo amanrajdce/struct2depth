@@ -106,6 +106,9 @@ flags.DEFINE_bool('joint_encoder', False, 'Whether to share parameters '
 flags.DEFINE_bool('handle_motion', True, 'Whether to try to handle motion by '
                   'using the provided segmentation masks.')
 flags.DEFINE_string('master', 'local', 'Location of the session.')
+flags.DEFINE_float("normal_depth_constraint_weight", 0.001, "Weight for penalizing dot product of normals and depth")
+flags.DEFINE_float("normal_reg_weight", 0.1, "Weight for enforcing normal to have norm 1")
+
 
 FLAGS = flags.FLAGS
 flags.mark_flag_as_required('data_dir')
@@ -181,7 +184,9 @@ def main(_):
                             joint_encoder=FLAGS.joint_encoder,
                             handle_motion=FLAGS.handle_motion,
                             equal_weighting=FLAGS.equal_weighting,
-                            size_constraint_weight=FLAGS.size_constraint_weight)
+                            size_constraint_weight=FLAGS.size_constraint_weight,
+                            normal_depth_constraint_weight=FLAGS.normal_depth_constraint_weight,
+                            normal_reg_weight=FLAGS.normal_reg_weight)
 
   train(train_model, FLAGS.pretrained_ckpt, FLAGS.imagenet_ckpt,
         FLAGS.checkpoint_dir, FLAGS.train_steps, FLAGS.summary_freq)

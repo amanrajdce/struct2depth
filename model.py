@@ -70,7 +70,9 @@ class Model(object):
                handle_motion=False,
                equal_weighting=False,
                size_constraint_weight=0.0,
-               train_global_scale_var=True):
+               train_global_scale_var=True,
+               normal_depth_constraint_weight=0.001,
+               normal_reg_weight = 0.1):
     self.data_dir = data_dir
     self.file_extension = file_extension
     self.is_training = is_training
@@ -103,6 +105,8 @@ class Model(object):
     self.equal_weighting = equal_weighting
     self.size_constraint_weight = size_constraint_weight
     self.train_global_scale_var = train_global_scale_var
+    self.normal_depth_constraint_weight = normal_depth_constraint_weight
+    self.normal_reg_weight = normal_reg_weight
 
     logging.info('data_dir: %s', data_dir)
     logging.info('file_extension: %s', file_extension)
@@ -413,6 +417,10 @@ class Model(object):
             joint_encoder=self.joint_encoder,
             seq_length=self.seq_length,
             weight_reg=self.weight_reg)
+    with tf.name_scope('normal_prediction'):
+      image = self.image_stack_norm[:, :, :, 3 * i:3 * (i + 1)]
+      self.norm, self.normal_net_endpoints = normal_net(image, self.depth[1], is_training=True) #### we use seq_length = 3, tgt_img index = 1
+      
 
   def build_loss(self):
     """Adds ops for computing loss."""
@@ -610,17 +618,39 @@ class Model(object):
 
       # Build the total loss as composed of L1 reconstruction, SSIM, smoothing
       # and object size constraint loss as appropriate.
-      self.reconstr_loss *= self.reconstr_weight
-      self.total_loss = self.reconstr_loss
-      if self.smooth_weight > 0:
-        self.smooth_loss *= self.smooth_weight
-        self.total_loss += self.smooth_loss
-      if self.ssim_weight > 0:
-        self.ssim_loss *= self.ssim_weight
-        self.total_loss += self.ssim_loss
-      if self.size_constraint_weight > 0:
-        self.inf_loss *= self.size_constraint_weight
-        self.total_loss += self.inf_loss
+      # self.reconstr_loss *= self.reconstr_weight
+      # self.total_loss = self.reconstr_loss
+      # if self.smooth_weight > 0:
+      #   self.smooth_loss *= self.smooth_weight
+      #   self.total_loss += self.smooth_loss
+      # if self.ssim_weight > 0:
+      #   self.ssim_loss *= self.ssim_weight
+      #   self.total_loss += self.ssim_loss
+      # if self.size_constraint_weight > 0:
+      #   self.inf_loss *= self.size_constraint_weight
+      #   self.total_loss += self.inf_loss
+      
+      for i in range(4):
+        tgt_image = self.images[i][:, :, :, 3:6]
+        normal_dot_prod_loss += \
+          tf.reduce_mean(
+              self.normal_depth_constraint_weight/(2**i) * \
+              self.compute_normal_depth_loss(tgt_image,
+                                          self.disp[1][i],
+                                          self.norm[i],
+                                          self.intrinsic_mat[:, i, :, :],
+                                          alpha=0.1,
+                                          n_shift=3,
+                                          inverse_depth=True)
+          )
+        
+        normal_reg_loss += self.normal_reg_weight/(2**i) * \
+            self.compute_normal_reg_loss(self.norm[i])
+
+      self.total_loss = 0
+      self.total_loss = normal_dot_prod_loss
+      self.total_loss += normal_reg_loss 
+
 
   def gradient_x(self, img):
     return img[:, :, :-1, :] - img[:, :, 1:, :]
@@ -656,8 +686,9 @@ class Model(object):
 
   def build_train_op(self):
     with tf.name_scope('train_op'):
+      train_var = tf.trainable.variables(scope = 'normal_prediction')
       optim = tf.train.AdamOptimizer(self.learning_rate, self.beta1)
-      self.train_op = slim.learning.create_train_op(self.total_loss, optim)
+      self.train_op = slim.learning.create_train_op(self.total_loss, optim, variables_to_train = train_var)
       self.global_step = tf.Variable(0, name='global_step', trainable=False)
       self.incr_global_step = tf.assign(
           self.global_step, self.global_step + 1)
@@ -846,3 +877,129 @@ class Model(object):
   def inference_objectmotion(self, inputs, sess):
     return sess.run(
         self.est_objectmotion, feed_dict={self.input_image_stack_om: inputs})
+  
+  def compute_normal_depth_loss(self, img, pred_disp, pred_norm, intrinsics,
+                                  alpha=0.1, n_shift=3, inverse_depth=True):
+    """Compute the dot product of normals and the 8-neighbor vectors
+
+    Args:
+        img: target RGB image [batch, H, W, 3]
+        pred_disp: predicted depth or inverse depth [batch, H, W, 1]
+        pred_norm: predicted surface normals [batch, H, W, 3]
+        intrinsics: camera intrinsics [batch, 3, 3]
+        alpha: hyperparameter used to weight 8-neighbor vectors by pixel intensity difference
+        n_shift: pixels to shift when calculating 8-neighbor vectors
+        inverse_depth: set to `True` if the input `pred_disp` is inverse depth
+
+    Returns:
+        The sum of dot product of normals and the 8-neighbor vectors for each pixel
+    """
+    batch, height, width, _ = pred_disp.get_shape().as_list()
+    depth_map = tf.squeeze(pred_disp, axis=-1) # squeeze to [batch, H, W]
+    mask = tf.greater(depth_map, tf.zeros_like(depth_map)) # mask indicating nonzero depth values
+    mask = tf.cast(mask, tf.float32)
+
+    # convert inverse depth to depth by assigning `eps` to every pixel with 0 inverse depth
+    # then inversing the inverse depth map
+    if inverse_depth:
+        eps = 1e-8
+        depth_eps = eps * (1.0 - mask)
+        depth_map += depth_eps
+        depth_map = 1 / depth_map
+
+    # get 3D coordinates of points
+    # done as in `projective_inverse_warp`
+    pixel_coords = meshgrid(batch, height, width)
+    cam_coords = pixel2cam(depth_map, pixel_coords, intrinsics, is_homogeneous=False) #[batch, 3, height, width]
+    # note that `cam_coords` has shape [batch, 3, height, width]
+    pts_3d_map = tf.transpose(cam_coords, perm=[0, 2, 3, 1]) # [batch, height, width, 3]
+
+    # copied from https://github.com/zhenheny/LEGO/blob/master/depth2normal/depth2normal_tf.py
+    nei = n_shift
+    # shift the 3d pts map by nei along 8 directions
+    pts_3d_map_ctr = pts_3d_map[:, nei:-nei, nei:-nei, :]
+    pts_3d_map_x0 = pts_3d_map[:, nei:-nei, 0:-(2*nei), :]
+    pts_3d_map_y0 = pts_3d_map[:, 0:-(2*nei), nei:-nei, :]
+    pts_3d_map_x1 = pts_3d_map[:, nei:-nei, 2*nei:, :]
+    pts_3d_map_y1 = pts_3d_map[:, 2*nei:, nei:-nei, :]
+    pts_3d_map_x0y0 = pts_3d_map[:, 0:-(2*nei), 0:-(2*nei), :]
+    pts_3d_map_x0y1 = pts_3d_map[:, 2*nei:, 0:-(2*nei), :]
+    pts_3d_map_x1y0 = pts_3d_map[:, 0:-(2*nei), 2*nei:, :]
+    pts_3d_map_x1y1 = pts_3d_map[:, 2*nei:, 2*nei:, :]
+
+    # generate difference between the central pixel and one of 8 neighboring pixels
+    # each `diff` has shape [batch, H-2*nei, W-2*nei, 3]
+    diff_x0 = pts_3d_map_ctr - pts_3d_map_x0
+    diff_x1 = pts_3d_map_ctr - pts_3d_map_x1
+    diff_y0 = pts_3d_map_y0 - pts_3d_map_ctr
+    diff_y1 = pts_3d_map_y1 - pts_3d_map_ctr
+    diff_x0y0 = pts_3d_map_x0y0 - pts_3d_map_ctr
+    diff_x0y1 = pts_3d_map_ctr - pts_3d_map_x0y1
+    diff_x1y0 = pts_3d_map_x1y0 - pts_3d_map_ctr
+    diff_x1y1 = pts_3d_map_ctr - pts_3d_map_x1y1
+    diff_stk = tf.stack([diff_x0, diff_y0, diff_x1, diff_y1,
+                          diff_x0y0, diff_x0y1, diff_x1y0, diff_x1y1], axis=0) # [8, batch, H-nei*2, W-nei*2, 3]
+
+    # generate weights for 8-neighbor vectors
+    img_ctr = img[:, nei:-nei, nei:-nei, :]
+    img_x0 = img[:, nei:-nei, 0:-(2*nei), :]
+    img_y0 = img[:, 0:-(2*nei), nei:-nei, :]
+    img_x1 = img[:, nei:-nei, 2*nei:, :]
+    img_y1 = img[:, 2*nei:, nei:-nei, :]
+    img_x0y0 = img[:, 0:-(2*nei), 0:-(2*nei), :]
+    img_x0y1 = img[:, 2*nei:, 0:-(2*nei), :]
+    img_x1y0 = img[:, 0:-(2*nei), 2*nei:, :]
+    img_x1y1 = img[:, 2*nei:, 2*nei:, :]
+
+    grad_x0 = img_x0 - img_ctr
+    grad_y0 = img_y0 - img_ctr
+    grad_x1 = img_x1 - img_ctr
+    grad_y1 = img_y1 - img_ctr
+    grad_x0y0 = img_x0y0 - img_ctr
+    grad_x0y1 = img_x0y1 - img_ctr
+    grad_x1y0 = img_x1y0 - img_ctr
+    grad_x1y1 = img_x1y1 - img_ctr
+
+    w_x0 = tf.exp(-alpha * tf.reduce_mean(tf.abs(grad_x0), axis=3))
+    w_y0 = tf.exp(-alpha * tf.reduce_mean(tf.abs(grad_y0), axis=3))
+    w_x1 = tf.exp(-alpha * tf.reduce_mean(tf.abs(grad_x1), axis=3))
+    w_y1 = tf.exp(-alpha * tf.reduce_mean(tf.abs(grad_y1), axis=3))
+    w_x0y0 = tf.exp(-alpha * tf.reduce_mean(tf.abs(grad_x0y0), axis=3))
+    w_x0y1 = tf.exp(-alpha * tf.reduce_mean(tf.abs(grad_x0y1), axis=3))
+    w_x1y0 = tf.exp(-alpha * tf.reduce_mean(tf.abs(grad_x1y0), axis=3))
+    w_x1y1 = tf.exp(-alpha * tf.reduce_mean(tf.abs(grad_x1y1), axis=3))
+
+    w = tf.stack([w_x0, w_y0, w_x1, w_y1, w_x0y0, w_x0y1, w_x1y0, w_x1y1], axis=0) # [8, batch, H, W]
+    w = w / tf.reduce_sum(w, axis=0) # normalize weights for each pixel, so they sum to 1
+
+    # crop pred_norm
+    cropped_norm = pred_norm[:, nei:-nei, nei:-nei, :]
+
+    # calculate loss by dot product
+    loss = 0
+    for v in range(8):
+        element_wise_prod = tf.multiply(diff_stk[v, :, :, :, :], cropped_norm[:, :, :, :]) # [batch, H, W, 3]
+        v_norm = tf.norm(diff_stk[v, :, :, :, :], axis=3)
+        n_norm = tf.norm(cropped_norm[:, :, :, :], axis=3)
+        cos_dist = tf.reduce_sum(element_wise_prod, axis=3) / (v_norm * n_norm + 1e-10)
+        cos_dist_abs = tf.abs(cos_dist)
+
+        # TODO: maybe clip the absolute cosine distance?
+
+        loss += tf.reduce_mean(tf.multiply(w[v, :, :, :], cos_dist_abs), axis=[1, 2])
+
+    return loss
+
+  def compute_normal_reg_loss(self, pred_norm):
+    # compute norm of surface normals
+    norm = tf.norm(
+                pred_norm,
+                ord='euclidean',
+                axis=3,
+                name='normal_norm')
+
+    ones = tf.ones_like(norm)
+
+    # compute squared error between norm and ones
+    loss = tf.reduce_mean((norm - ones) ** 2)
+    return loss
