@@ -197,19 +197,14 @@ def _run_inference(output_dir=None,
           logging.info('%s of %s files processed.', i, len(im_files))
 
         # Read image and run inference.
+        if is_semantic:
+            sem = np.load(sem_files[i])
         if inference_mode == INFERENCE_MODE_SINGLE:
           if inference_crop == INFERENCE_CROP_NONE:
             print(im_files[i])
             im = util.load_image(im_files[i], resize=(img_width, img_height))
             if imagenet_norm:
                 im = (im - IMAGENET_MEAN) / IMAGENET_SD
-            if is_semantic:
-                print(sem_files[i])
-                sem = np.load(sem_files[i])
-                sem = cv2.resize(
-                    src=sem, dsize=(img_width, img_height), interpolation=cv2.INTER_NEAREST
-                )
-                sem = get_one_hot(sem, nb_classes=19)
 
           elif inference_crop == INFERENCE_CROP_CITYSCAPES:
             im = util.crop_cityscapes(util.load_image(im_files[i]),
@@ -217,9 +212,16 @@ def _run_inference(output_dir=None,
         elif inference_mode == INFERENCE_MODE_TRIPLETS:
           im = util.load_image(im_files[i], resize=(img_width * 3, img_height))
           im = im[:, img_width:img_width*2]
+          if imagenet_norm:
+              im = (im - IMAGENET_MEAN) / IMAGENET_SD
+          sem = sem[:, img_width:img_width*2]
         if flip_for_depth:
           im = np.flip(im, axis=1)
         if is_semantic:
+            sem = cv2.resize(
+                src=sem, dsize=(img_width, img_height), interpolation=cv2.INTER_NEAREST
+            )
+            sem = get_one_hot(sem, nb_classes=19)
             im = np.concatenate((im, sem), axis=2)
             #print("im shape: {}".format(im.shape))
 
