@@ -68,13 +68,14 @@ class Model(object):
                compute_minimum_loss=True,
                use_skip=True,
                joint_encoder=True,
-               build_sum=True,
+               build_sum=False, ##
                shuffle=True,
                input_file='train',
                handle_motion=False,
                equal_weighting=False,
                size_constraint_weight=0.0,
-               train_global_scale_var=True):
+               train_global_scale_var=True,
+               motion_mask=False):
     self.data_dir = data_dir
     self.ins_data_dir = ins_data_dir
     self.sem_data_dir = sem_data_dir
@@ -110,6 +111,7 @@ class Model(object):
     self.equal_weighting = equal_weighting
     self.size_constraint_weight = size_constraint_weight
     self.train_global_scale_var = train_global_scale_var
+    self.motion_mask = motion_mask
 
     logging.info('data_dir: %s', data_dir)
     logging.info('ins_data_dir: %s', ins_data_dir)
@@ -175,7 +177,6 @@ class Model(object):
 
     # At this point, the model is ready. Print some info on model params.
     util.count_parameters()
-    #sys.exit()
 
   def build_train_graph(self):
     self.build_inference_for_training()
@@ -187,6 +188,8 @@ class Model(object):
   def build_inference_for_training(self):
     """Invokes depth and ego-motion networks and computes clouds if needed."""
     print("Started reading a batch")
+    # Here self.image_stack, is image read in sequence, where middle frame is
+    # target frame
     if self.is_semantic:
         (self.image_stack, self.image_stack_norm, self.seg_stack,
         self.intrinsic_mat, self.intrinsic_mat_inv, self.sem_stack) = \
@@ -197,6 +200,9 @@ class Model(object):
         self.reader.read_data()
 
     print("successfully read a batch of data")
+    # self.image_stack: shape=(4, 128, 416, 9)
+    # self.image_stack_norm: shape=(4, 128, 416, 9)
+    # self.seg_stack: shape=(4, 128, 416, 9)
     with tf.variable_scope('depth_prediction'):
       # Organized by ...[i][scale].  Note that the order is flipped in
       # variables in build_loss() below.
@@ -220,6 +226,10 @@ class Model(object):
         multiscale_disps_i, disp_bottlenecks[i] = nets.disp_net(
             self.architecture, image, self.use_skip,
             self.weight_reg, True)
+        # multiscale_disps_i:
+        # shape=(4, 128, 416, 1), shape=(4, 64, 208, 1),
+        # shape=(4, 32, 104, 1), shape=(4, 16, 52, 1)
+        # disp_bottlenecks[i]: shape=(4, 4, 13, 512)
         multiscale_depths_i = [1.0 / d for d in multiscale_disps_i]
         self.disp[i] = multiscale_disps_i
         self.depth[i] = multiscale_depths_i
@@ -434,12 +444,51 @@ class Model(object):
           disp_bottleneck_stack = tf.concat(disp_bottlenecks, axis=3)
         else:
           disp_bottleneck_stack = None
-        self.egomotion = nets.egomotion_net(
-            image_stack=self.image_stack_norm,
-            disp_bottleneck_stack=disp_bottleneck_stack,
-            joint_encoder=self.joint_encoder,
-            seq_length=self.seq_length,
-            weight_reg=self.weight_reg)
+
+        if self.motion_mask:
+            """
+            This is modified to incorporate SfM-Net
+            """
+            self.obj_motion_mask = {}
+            self.obj_motion_mask_upsampled = {}
+            self.cam_pose = {}
+            self.obj_pose = {}
+
+            self.middle_frame_index = util.get_seq_middle(self.seq_length)
+
+            for i in range(self.seq_length):
+              for j in range(self.seq_length):
+                if i == j:
+                  continue
+                image_t = self.image_stack_norm[:, :, :, 3 * i:3 * (i + 1)]
+                image_t_1 = self.image_stack_norm[:, :, :, 3 * j:3 * (j + 1)]
+                imagtt = tf.concat([image_t, image_t_1], axis=3)
+                multiscale_obj_masks, cam_ego, obj_ego = nets.egomotion_sfmnet(
+                    image_stack=imagtt,
+                    seq_length=self.seq_length,
+                    weight_reg=self.weight_reg,
+                    use_skip=self.use_skip,
+                    is_training=self.is_training)
+                self.cam_pose[(i,j)] = cam_ego
+                self.obj_pose[(i,j)] = obj_ego
+                self.obj_motion_mask[(i,j)] = multiscale_obj_masks
+                if self.depth_upsampling:
+                  self.obj_motion_mask_upsampled[(i,j)] = []
+                  # Upsample low-resolution object motion masks using
+                  # differentiable bilinear interpolation.
+                  for s in range(len(multiscale_obj_masks)):
+                    self.obj_motion_mask_upsampled[(i,j)].append(
+                        tf.image.resize_bilinear(multiscale_obj_masks[s],
+                        [self.img_height, self.img_width],
+                        align_corners=True))
+        else:
+            self.egomotion = nets.egomotion_net(
+                image_stack=self.image_stack_norm,
+                disp_bottleneck_stack=disp_bottleneck_stack,
+                joint_encoder=self.joint_encoder,
+                seq_length=self.seq_length,
+                weight_reg=self.weight_reg)
+
 
   def build_loss(self):
     """Adds ops for computing loss."""
@@ -590,19 +639,53 @@ class Model(object):
               self.warped_image[s][key] = tf.concat(self.all_batches, axis=0)
 
             else:
-              # Don't handle motion, classic model formulation.
-              egomotion_mat_i_j = project.get_transform_mat(
-                  self.egomotion, i, j)
-              # Inverse warp the source image to the target image frame for
-              # photometric consistency loss.
-              self.warped_image[s][key], self.warp_mask[s][key] = (
-                  project.inverse_warp(
-                      source,
-                      target_depth,
-                      egomotion_mat_i_j,
-                      self.intrinsic_mat[:, selected_scale, :, :],
-                      self.intrinsic_mat_inv[:, selected_scale, :, :]))
+              """
+              This is modified to incorporate SfM-Net
+              """
+              if not self.motion_mask:
+                  # self.egomotion: shape=(B, 2, 6)
+                  # Don't handle motion, classic model formulation.
+                  # Order of i,j changed due to possible mistake in original code.
+                  # TODO: verify this change, i: source frame, j: target frame
+                  egomotion_mat_j_i = project.get_transform_mat(
+                        self.egomotion, j, i) # shape=(B, 4, 4)
+                  # Inverse warp the source image to the target image frame for
+                  # Photometric consistency loss.
+                  self.warped_image[s][key], self.warp_mask[s][key] = (
+                        project.inverse_warp(
+                            source,
+                            target_depth,
+                            egomotion_mat_j_i,
+                            self.intrinsic_mat[:, selected_scale, :, :],
+                            self.intrinsic_mat_inv[:, selected_scale, :, :]))
+              else:
+                  target_motion_mask = self.obj_motion_mask_upsampled[(j,i)][s] if \
+                  self.depth_upsampling else self.obj_motion_mask[(j,i)][s]
 
+                  cam_mat_j_i = project.get_transform_mat_cam(
+                        self.cam_pose[(j,i)] # shape=(B, 4, 4)
+                    )
+                  obj_mat_j_i = project.get_transform_mat_obj_motion(
+                        self.obj_pose[(j,i)], num_obj_motion=3
+                        # shape=(B, num_obj_motion, 4, 4)
+                    )
+
+                  # Inverse warp the source image to the target image frame for
+                  # Photometric consistency loss.
+                  self.warped_image[s][key], self.warp_mask[s][key] = (
+                        project.inverse_warp_sfmnet(
+                            source,
+                            target_depth,
+                            target_motion_mask,
+                            cam_mat_j_i,
+                            obj_mat_j_i,
+                            self.intrinsic_mat[:, selected_scale, :, :],
+                            self.intrinsic_mat_inv[:, selected_scale, :, :],
+                            num_obj_motion=3))
+
+
+            # self.warped_image[s][key]: shape=(4, 128, 416, 3) at s=0
+            # self.warp_mask[s][key]: shape=(4, 128, 416, 1) at s=0
             # Reconstruction loss.
             self.warp_error[s][key] = tf.abs(self.warped_image[s][key] - target)
             if not self.compute_minimum_loss:

@@ -27,16 +27,20 @@ from __future__ import print_function
 from absl import logging
 import numpy as np
 import tensorflow as tf
+import sys
 
 
-def inverse_warp(img, depth, egomotion_mat, intrinsic_mat,
-                 intrinsic_mat_inv):
+def inverse_warp(
+    img, depth, egomotion_mat,
+    intrinsic_mat, intrinsic_mat_inv
+):
   """Inverse warp a source image to the target image plane.
 
   Args:
     img: The source image (to sample pixels from) -- [B, H, W, 3].
     depth: Depth map of the target image -- [B, H, W].
-    egomotion_mat: Matrix defining egomotion transform -- [B, 4, 4].
+    egomotion_mat: Target to source camera transformation matrix
+                   defining egomotion transform -- [B, 4, 4].
     intrinsic_mat: Camera intrinsic matrix -- [B, 3, 3].
     intrinsic_mat_inv: Inverse of the intrinsic matrix -- [B, 3, 3].
   Returns:
@@ -44,26 +48,113 @@ def inverse_warp(img, depth, egomotion_mat, intrinsic_mat,
   """
   dims = tf.shape(img)
   batch_size, img_height, img_width = dims[0], dims[1], dims[2]
-  depth = tf.reshape(depth, [batch_size, 1, img_height * img_width])
-  grid = _meshgrid_abs(img_height, img_width)
-  grid = tf.tile(tf.expand_dims(grid, 0), [batch_size, 1, 1])
-  cam_coords = _pixel2cam(depth, grid, intrinsic_mat_inv)
+  depth = tf.reshape(
+    depth, [batch_size, 1, img_height * img_width]
+  )# shape=(B, 1, 53248) at H=128, W=416
+
+  grid = _meshgrid_abs(img_height, img_width) # shape=(3, 53248) at H=128, W=416
+  grid = tf.tile(
+    tf.expand_dims(grid, 0), [batch_size, 1, 1]
+  ) # shape=(B, 3, 53248) at H=128, W=416
+
+  cam_coords = _pixel2cam(depth, grid, intrinsic_mat_inv) # shape=(B, 3, 53248)
   ones = tf.ones([batch_size, 1, img_height * img_width])
-  cam_coords_hom = tf.concat([cam_coords, ones], axis=1)
+  cam_coords_hom = tf.concat([cam_coords, ones], axis=1) # shape=(B, 4, 53248)
 
   # Get projection matrix for target camera frame to source pixel frame
   hom_filler = tf.constant([0.0, 0.0, 0.0, 1.0], shape=[1, 1, 4])
   hom_filler = tf.tile(hom_filler, [batch_size, 1, 1])
   intrinsic_mat_hom = tf.concat(
       [intrinsic_mat, tf.zeros([batch_size, 3, 1])], axis=2)
-  intrinsic_mat_hom = tf.concat([intrinsic_mat_hom, hom_filler], axis=1)
-  proj_target_cam_to_source_pixel = tf.matmul(intrinsic_mat_hom, egomotion_mat)
-  source_pixel_coords = _cam2pixel(cam_coords_hom,
-                                   proj_target_cam_to_source_pixel)
-  source_pixel_coords = tf.reshape(source_pixel_coords,
-                                   [batch_size, 2, img_height, img_width])
-  source_pixel_coords = tf.transpose(source_pixel_coords, perm=[0, 2, 3, 1])
+  intrinsic_mat_hom = tf.concat([intrinsic_mat_hom, hom_filler], axis=1) # shape=(B, 4, 4)
+  proj_target_cam_to_source_pixel = tf.matmul(intrinsic_mat_hom, egomotion_mat) # shape=(B, 4, 4)
+
+  source_pixel_coords = _cam2pixel(
+        cam_coords_hom, proj_target_cam_to_source_pixel
+    ) # shape=(B, 2, 53248)
+
+  source_pixel_coords = tf.reshape(
+        source_pixel_coords, [batch_size, 2, img_height, img_width]
+    ) # shape=(B, 2, 128, 416)
+
+  source_pixel_coords = tf.transpose(
+        source_pixel_coords, perm=[0, 2, 3, 1]
+    ) # shape=(B, 128, 416, 2),
   projected_img, mask = _spatial_transformer(img, source_pixel_coords)
+  # projected_img: shape=(B, 128, 416, 3)
+  # mask: shape=(B, 128, 416, 1)
+
+  return projected_img, mask
+
+
+def inverse_warp_sfmnet(
+    img, depth, motion_mask, cam_egomotion_mat, obj_egomotion_mat,
+    intrinsic_mat, intrinsic_mat_inv, num_obj_motion=3
+):
+  """Inverse warp a source image to the target image plane.
+
+  Args:
+    img: The source image (to sample pixels from) -- [B, H, W, 3].
+    depth: Depth map of the target image -- [B, H, W].
+    motion_mask: Motion mask from target to source -- [B, H, W, num_obj_motion].
+    cam_egomotion_mat: Target to source global camera transformation matrix
+                   defining egomotion transform -- [B, 4, 4].
+    obj_egomotion_mat: Target to source oject transformation matrix
+                   defining egomotion transform -- [B, num_obj_motion, 4, 4].
+    intrinsic_mat: Camera intrinsic matrix -- [B, 3, 3].
+    intrinsic_mat_inv: Inverse of the intrinsic matrix -- [B, 3, 3].
+    num_obj_motion: Number of object motion masks, for every mask we have a object pose
+  Returns:
+    Projected source image
+  """
+  dims = tf.shape(img)
+  batch_size, img_height, img_width = dims[0], dims[1], dims[2]
+  depth = tf.reshape(
+        depth, [batch_size, 1, img_height * img_width]
+    )# shape=(B, 1, 53248) at H=128, W=416
+
+  grid = _meshgrid_abs(img_height, img_width) # shape=(3, 53248) at H=128, W=416
+  grid = tf.tile(
+        tf.expand_dims(grid, 0), [batch_size, 1, 1]
+    ) # shape=(B, 3, 53248) at H=128, W=416
+
+  cam_coords = _pixel2cam(depth, grid, intrinsic_mat_inv) # shape=(B, 3, 53248)
+  ones = tf.ones([batch_size, 1, img_height * img_width])
+  cam_coords_hom = tf.concat([cam_coords, ones], axis=1) # shape=(B, 4, 53248)
+
+  # Get projection matrix for target camera frame to source pixel frame
+  hom_filler = tf.constant([0.0, 0.0, 0.0, 1.0], shape=[1, 1, 4])
+  hom_filler = tf.tile(hom_filler, [batch_size, 1, 1])
+  intrinsic_mat_hom = tf.concat(
+      [intrinsic_mat, tf.zeros([batch_size, 3, 1])], axis=2)
+  intrinsic_mat_hom = tf.concat([intrinsic_mat_hom, hom_filler], axis=1) # shape=(B, 4, 4)
+
+  acc_cam_coords = []
+  for idx in range(num_obj_motion):
+      curr_motion_mask = tf.reshape(
+            motion_mask[:, :, :, idx], [batch_size, 1, img_height * img_width]
+        )# shape=(B, 1, 53248) at H=128, W=416
+      curr_pose = obj_egomotion_mat[:, idx, :, :]
+      acc_cam_coords.append(tf.matmul(
+            curr_pose, cam_coords_hom) * curr_motion_mask
+        )
+  acc_cam_coords = tf.add_n(acc_cam_coords) # shape=(B, 4, 53248)
+  cam_coords_hom = tf.add(
+        acc_cam_coords, tf.matmul(cam_egomotion_mat, cam_coords_hom)
+    ) # shape=(B, 4, 53248)
+  source_pixel_coords = _cam2pixel(
+        cam_coords_hom, intrinsic_mat_hom
+    ) # shape=(B, 2, 53248)
+  source_pixel_coords = tf.reshape(
+        source_pixel_coords, [batch_size, 2, img_height, img_width]
+    ) # shape=(B, 2, 128, 416)
+  source_pixel_coords = tf.transpose(
+        source_pixel_coords, perm=[0, 2, 3, 1]
+    ) # shape=(B, 128, 416, 2),
+  projected_img, mask = _spatial_transformer(img, source_pixel_coords)
+  # projected_img: shape=(B, 128, 416, 3)
+  # mask: shape=(B, 128, 416, 1)
+
   return projected_img, mask
 
 
@@ -85,6 +176,43 @@ def get_transform_mat(egomotion_vecs, i, j):
   for i in range(1, len(egomotion_transforms)):
     egomotion_mat = tf.matmul(egomotion_mat, egomotion_transforms[i])
   return egomotion_mat
+
+
+def get_transform_mat_cam(egomotion_vec):
+    """
+    Returns a transform matrix defining the transform from frame i to j.
+    Args:
+        egomotion_vec: shape=(B, 1, 6)
+    Returns:
+        transform_matrix: shape=(B, 4, 4)
+    """
+    batchsize = tf.shape(egomotion_vec)[0]
+    transform_matrix = _egomotion_vec2mat(egomotion_vec[:, 0, :], batchsize)
+
+    return transform_matrix
+
+
+def get_transform_mat_obj_motion(egomotion_vec, num_obj_motion=3):
+    """
+    Returns a transform matrix defining the transform from frame i to j
+    for object motion masks as in SfM-Net.
+    Args:
+        egomotion_vec: shape=(B, num_obj_motion, 1, 6)
+    Returns:
+        transform_matrix: shape=(B, num_obj_motion, 4, 4)
+    """
+    egomotion_transforms = []
+    batchsize = tf.shape(egomotion_vec)[0]
+    for idx in range(num_obj_motion):
+        transform_matrix = _egomotion_vec2mat(
+            egomotion_vec[:, idx, 0, :], batchsize
+        )
+        transform_matrix = tf.expand_dims(transform_matrix, axis=1)
+        egomotion_transforms.append(transform_matrix)
+
+    transform_matrix = tf.concat(egomotion_transforms, axis=1)
+
+    return transform_matrix
 
 
 def _pixel2cam(depth, pixel_coords, intrinsic_mat_inv):

@@ -1,4 +1,5 @@
-./models
-./*pycache*
-./experiment
-./results
+models
+__pycache__
+experiment
+results
+*/__pycache__

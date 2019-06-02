@@ -22,6 +22,8 @@ from __future__ import print_function
 
 import numpy as np
 import tensorflow as tf
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.activations import relu
 import sys
 slim = tf.contrib.slim
 
@@ -41,8 +43,10 @@ WEIGHT_DECAY_KEY = 'WEIGHT_DECAY'
 EGOMOTION_VEC_SIZE = 6
 
 
-def egomotion_net(image_stack, disp_bottleneck_stack, joint_encoder, seq_length,
-                  weight_reg):
+def egomotion_net(
+    image_stack, disp_bottleneck_stack,
+    joint_encoder, seq_length, weight_reg
+):
   """Predict ego-motion vectors from a stack of frames or embeddings.
 
   Args:
@@ -81,23 +85,180 @@ def egomotion_net(image_stack, disp_bottleneck_stack, joint_encoder, seq_length,
       with tf.variable_scope('pose'):
         inputs = disp_bottleneck_stack if joint_encoder else cnv5
         cnv6 = slim.conv2d(inputs, 256, [3, 3], stride=2, scope='cnv6')
-        cnv7 = slim.conv2d(cnv6, 256, [3, 3], stride=2, scope='cnv7')
+        cnv7 = slim.conv2d(cnv6, 256, [3, 3], stride=2, scope='cnv7') # shape=(B, 2, 7, 256)
         pred_channels = EGOMOTION_VEC_SIZE * num_egomotion_vecs
         egomotion_pred = slim.conv2d(cnv7, pred_channels, [1, 1], scope='pred',
                                      stride=1, normalizer_fn=None,
-                                     activation_fn=None)
-        egomotion_avg = tf.reduce_mean(egomotion_pred, [1, 2])
+                                     activation_fn=None) # shape=(B, 1, 4, 12)
+
+        egomotion_avg = tf.reduce_mean(egomotion_pred, [1, 2]) # shape=(B, 12)
         egomotion_res = tf.reshape(
-            egomotion_avg, [-1, num_egomotion_vecs, EGOMOTION_VEC_SIZE])
+            egomotion_avg, [-1, num_egomotion_vecs, EGOMOTION_VEC_SIZE]) # shape=(B, 2, 6)
+
         # Tinghui found that scaling by a small constant facilitates training.
         egomotion_scaled = tf.concat([egomotion_res[:, 0:3] * SCALE_TRANSLATION,
                                       egomotion_res[:, 3:6] * SCALE_ROTATION],
-                                     axis=1)
+                                     axis=1) # shape=(B, 2, 6)
+
     return egomotion_scaled
 
 
-def objectmotion_net(image_stack, disp_bottleneck_stack, joint_encoder,
-                     seq_length, weight_reg):
+def egomotion_sfmnet(
+    image_stack, seq_length, weight_reg,
+    use_skip, is_training, num_obj_motion=3
+):
+  """Predict ego-motion vectors from a stack of frames or embeddings.
+  Defines an encoder-decoder architecture taken similar to dispnet
+
+  Args:
+    image_stack: Input tensor with shape [B, h, w, 2 * 3] in order.
+    seq_length: The sequence length used.
+    weight_reg: The amount of weight regularization.
+    obj_motion: Number of object motion masks
+
+  Returns:
+    Camera and Object Egomotion vectors with shapes:
+    Camera: [B, seq_length - 1, 6]
+    Object: [B, seq_length - 1, K, 6]
+    Object motion masks: [B, seq_length - 1, K, ]
+  """
+  num_egomotion_vecs = seq_length - 1
+  with tf.variable_scope('object_net', reuse=tf.AUTO_REUSE) as sc:
+    # Encode image.
+    bottleneck, skip_connections = encoder_resnet(
+        image_stack, weight_reg, is_training
+    )
+    # use the embeddings
+    b, *_ = bottleneck.shape
+    r1 = tf.reshape(bottleneck, [b, -1])
+    r2 = Dense(512, activation=relu)(r1)
+    r3 = Dense(512, activation=relu)(r2)
+
+    # generate camera pose
+    cam_ego = Dense(6)(r3) # (B, 6)
+    cam_ego = tf.reshape(
+        cam_ego, [-1, 1, EGOMOTION_VEC_SIZE]) # shape=(B, 1, 6)
+
+    # Scaling by a small constant facilitates training.
+    cam_ego_scaled = tf.concat([cam_ego[:, 0:3] * SCALE_TRANSLATION,
+                                  cam_ego[:, 3:6] * SCALE_ROTATION],
+                                 axis=1) # shape=(B, 1, 6)
+
+    # generate object poses
+    total_ego_vecs = EGOMOTION_VEC_SIZE * num_obj_motion
+    obj_ego = Dense(total_ego_vecs)(r3) # (B, 18)
+    obj_ego = tf.reshape(
+        obj_ego, [-1, num_obj_motion, 1, EGOMOTION_VEC_SIZE]) # shape=(B, 3, 1, 6)
+    obj_ego_scaled = tf.concat([obj_ego[:, 0:3] * SCALE_TRANSLATION,
+                                  obj_ego[:, 3:6] * SCALE_ROTATION],
+                                 axis=1) # shape=(B, 3, 1, 6)
+
+    # Decode object motion probability mask
+    multiscale_obj_mask = decoder_resnet_obj(
+        image_stack, bottleneck, weight_reg, use_skip, skip_connections)
+
+    return [multiscale_obj_mask, cam_ego_scaled, obj_ego_scaled]
+
+
+def decoder_resnet_obj(target_image, bottleneck, weight_reg, use_skip,
+                   skip_connections):
+  """Defines the depth decoder architecture.
+
+  Args:
+    target_image: The original encoder input tensor with shape [B, h, w, 9].
+                  Just the shape information is used here.
+    bottleneck: Bottleneck layer to be decoded.
+    weight_reg: The amount of weight regularization.
+    use_skip: Whether the passed skip connections econv1, econv2, econv3 and
+              econv4 should be used.
+    skip_connections: Tensors for building skip-connections.
+
+  Returns:
+    object motion masks at 4 different scales.
+  """
+  (econv4, econv3, econv2, econv1) = skip_connections
+  decoder_filters = [16, 32, 64, 128, 256]
+  default_pad = tf.constant([[0, 0], [1, 1], [1, 1], [0, 0]])
+  reg = slim.l2_regularizer(weight_reg) if weight_reg > 0.0 else None
+  with slim.arg_scope([slim.conv2d, slim.conv2d_transpose],
+                      normalizer_fn=None,
+                      normalizer_params=None,
+                      activation_fn=tf.nn.relu,
+                      weights_regularizer=reg):
+    upconv5 = slim.conv2d_transpose(bottleneck, decoder_filters[4], [3, 3],
+                                    stride=2, scope='upconv5')
+    upconv5 = _resize_like(upconv5, econv4)
+    if use_skip:
+      i5_in = tf.concat([upconv5, econv4], axis=3)
+    else:
+      i5_in = upconv5
+    i5_in = tf.pad(i5_in, default_pad, mode='REFLECT')
+    iconv5 = slim.conv2d(i5_in, decoder_filters[4], [3, 3], stride=1,
+                         scope='iconv5', padding='VALID')
+
+    upconv4 = slim.conv2d_transpose(iconv5, decoder_filters[3], [3, 3],
+                                    stride=2, scope='upconv4')
+    upconv4 = _resize_like(upconv4, econv3)
+    if use_skip:
+      i4_in = tf.concat([upconv4, econv3], axis=3)
+    else:
+      i4_in = upconv4
+    i4_in = tf.pad(i4_in, default_pad, mode='REFLECT')
+    iconv4 = slim.conv2d(i4_in, decoder_filters[3], [3, 3], stride=1,
+                         scope='iconv4', padding='VALID')
+
+    mask4 = slim.conv2d(iconv4, 3, [1, 1], stride=1,
+                         activation_fn=tf.sigmoid, normalizer_fn=None,
+                         scope='mask4', padding='VALID')
+
+    upconv3 = slim.conv2d_transpose(iconv4, decoder_filters[2], [3, 3],
+                                    stride=2, scope='upconv3')
+    upconv3 = _resize_like(upconv3, econv2)
+    if use_skip:
+      i3_in = tf.concat([upconv3, econv2], axis=3)
+    else:
+      i3_in = upconv3
+    i3_in = tf.pad(i3_in, default_pad, mode='REFLECT')
+    iconv3 = slim.conv2d(i3_in, decoder_filters[2], [3, 3], stride=1,
+                         scope='iconv3', padding='VALID')
+
+    mask3 = slim.conv2d(iconv3, 3, [1, 1], stride=1,
+                         activation_fn=tf.sigmoid, normalizer_fn=None,
+                         scope='mask3', padding='VALID')
+
+    upconv2 = slim.conv2d_transpose(iconv3, decoder_filters[1], [3, 3],
+                                    stride=2, scope='upconv2')
+    upconv2 = _resize_like(upconv2, econv1)
+    if use_skip:
+      i2_in = tf.concat([upconv2, econv1], axis=3)
+    else:
+      i2_in = upconv2
+    i2_in = tf.pad(i2_in, default_pad, mode='REFLECT')
+    iconv2 = slim.conv2d(i2_in, decoder_filters[1], [3, 3], stride=1,
+                         scope='iconv2', padding='VALID')
+
+    mask2 = slim.conv2d(iconv2, 3, [1, 1], stride=1,
+                         activation_fn=tf.sigmoid, normalizer_fn=None,
+                         scope='mask2', padding='VALID')
+
+    upconv1 = slim.conv2d_transpose(iconv2, decoder_filters[0], [3, 3],
+                                    stride=2, scope='upconv1')
+    upconv1 = _resize_like(upconv1, target_image)
+    upconv1 = tf.pad(upconv1, default_pad, mode='REFLECT')
+    iconv1 = slim.conv2d(upconv1, decoder_filters[0], [3, 3], stride=1,
+                         scope='iconv1', padding='VALID')
+
+    mask1 = slim.conv2d(iconv1, 3, [1, 1], stride=1,
+                         activation_fn=tf.sigmoid, normalizer_fn=None,
+                         scope='mask1', padding='VALID')
+
+  return [mask1, mask2, mask3, mask4]
+
+
+def objectmotion_net(
+    image_stack, disp_bottleneck_stack,
+    joint_encoder, seq_length, weight_reg
+):
   """Predict object-motion vectors from a stack of frames or embeddings.
 
   Args:

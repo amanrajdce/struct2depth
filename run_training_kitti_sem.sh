@@ -1,11 +1,11 @@
-ckpt_dir="/mnt/1.9TB/struct2depth/experiment/training/semantic_from_scratch"
+ckpt_dir="/mnt/1.9TB/struct2depth/experiment/training/semantic_from_checkpoint"
 data_dir="/mnt/1.9TB/struct2depth/kitti_processed/" # Set for KITTI
 ins_data_dir="/mnt/1.9TB/struct2depth/kitti_eigen_instance/" # Set for KITTI
 sem_data_dir="/mnt/1.9TB/struct2depth/kitti_eigen_semantic/"
 imagenet_ckpt="/mnt/1.9TB/struct2depth/experiment/resnet_pretrained/model.ckpt"
 pretrained_ckpt="/mnt/1.9TB/struct2depth/experiment/checkpoint/model"
 
-python train.py \
+CUDA_VISIBLE_DEVICES=2 python train.py \
   --logtostderr \
   --checkpoint_dir $ckpt_dir \
   --data_dir $data_dir \
@@ -15,8 +15,9 @@ python train.py \
   --batch_size 4 \
   --summary_freq 100 \
   --imagenet_norm true \
-  --is_semantic true
-  #--pretrained_ckpt $pretrained_ckpt
+  --is_semantic true \
+  --pretrained_ckpt $pretrained_ckpt \
+  --skip_depth_conv1 true
   #--learning_rate 0.0002
   #--handle_motion=False \
   #--size_constraint_weight=0

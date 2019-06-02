@@ -34,6 +34,7 @@ import model
 import nets
 import reader
 import util
+import sys
 
 gfile = tf.gfile
 MAX_TO_KEEP = 1000000  # Maximum number of checkpoints to keep.
@@ -80,6 +81,8 @@ flags.DEFINE_enum('flipping_mode', reader.FLIP_RANDOM,
                   'always or never, respectively.')
 flags.DEFINE_string('pretrained_ckpt', None, 'Path to checkpoint with '
                     'pretrained weights.  Do not include .data* extension.')
+flags.DEFINE_bool('skip_depth_conv1', False, 'Whether to skip initialization'
+                'fo first layer of dispnet(conv1), used for training with semantic')
 flags.DEFINE_string('imagenet_ckpt', None, 'Initialize the weights according '
                     'to an ImageNet-pretrained checkpoint. Requires '
                     'architecture to be ResNet-18.')
@@ -108,6 +111,8 @@ flags.DEFINE_bool('joint_encoder', False, 'Whether to share parameters '
                   'joint encoder.')
 flags.DEFINE_bool('handle_motion', True, 'Whether to try to handle motion by '
                   'using the provided segmentation masks.')
+flags.DEFINE_bool('motion_mask', False, 'Whether to try the motion mask '
+                  'as per SfM-Net paper.')
 flags.DEFINE_string('master', 'local', 'Location of the session.')
 
 FLAGS = flags.FLAGS
@@ -191,14 +196,17 @@ def main(_):
                             joint_encoder=FLAGS.joint_encoder,
                             handle_motion=FLAGS.handle_motion,
                             equal_weighting=FLAGS.equal_weighting,
-                            size_constraint_weight=FLAGS.size_constraint_weight)
+                            size_constraint_weight=FLAGS.size_constraint_weight,
+                            motion_mask=FLAGS.motion_mask)
 
   train(train_model, FLAGS.pretrained_ckpt, FLAGS.imagenet_ckpt,
-        FLAGS.checkpoint_dir, FLAGS.train_steps, FLAGS.summary_freq)
+        FLAGS.checkpoint_dir, FLAGS.train_steps, FLAGS.summary_freq, FLAGS.skip_depth_conv1)
 
 
-def train(train_model, pretrained_ckpt, imagenet_ckpt, checkpoint_dir,
-          train_steps, summary_freq):
+def train(
+    train_model, pretrained_ckpt, imagenet_ckpt, checkpoint_dir,
+    train_steps, summary_freq, skip_depth_conv1
+):
   """Train model."""
   vars_to_restore = None
   if pretrained_ckpt is not None:
@@ -207,9 +215,17 @@ def train(train_model, pretrained_ckpt, imagenet_ckpt, checkpoint_dir,
   elif imagenet_ckpt:
     vars_to_restore = util.get_imagenet_vars_to_restore(imagenet_ckpt)
     ckpt_path = imagenet_ckpt
+
+  if vars_to_restore is not None and skip_depth_conv1:
+      vars_to_restore = {k: vars_to_restore[k] for k in vars_to_restore \
+                        if "depth_prediction/conv1" not in k}
+      logging.info("Skipped initialization of first Conv layer of dispnet")
+
   pretrain_restorer = tf.train.Saver(vars_to_restore)
+
   vars_to_save = util.get_vars_to_save_and_restore()
   vars_to_save[train_model.global_step.op.name] = train_model.global_step
+
   saver = tf.train.Saver(vars_to_save, max_to_keep=MAX_TO_KEEP)
   sv = tf.train.Supervisor(logdir=checkpoint_dir, save_summaries_secs=0,
                            saver=None)

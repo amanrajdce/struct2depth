@@ -32,8 +32,8 @@ import util
 
 gfile = tf.gfile
 
-QUEUE_SIZE = 200
-#QUEUE_SIZE = 2000
+#QUEUE_SIZE = 200
+QUEUE_SIZE = 2000
 QUEUE_BUFFER = 3
 # See nets.encoder_resnet as reference for below input-normalizing constants.
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
