@@ -8,16 +8,18 @@ import numpy as np
 import argparse
 from depth_evaluation_utils import *
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--kitti_dir", type=str, help='Path to the KITTI dataset directory')
-parser.add_argument("--pred_dir", type=str, help="Path to the prediction file")
-parser.add_argument("--test_file_list", type=str, default='./data/kitti/test_files_eigen.txt',
-    help="Path to the list of test files")
-parser.add_argument('--min_depth', type=float, default=1e-3, help="Threshold for minimum depth")
-parser.add_argument('--max_depth', type=float, default=80, help="Threshold for maximum depth")
-args = parser.parse_args()
+def create_parser():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--kitti_dir", type=str, help='Path to the KITTI dataset directory')
+    parser.add_argument("--pred_dir", type=str, help="Path to the prediction file")
+    parser.add_argument("--test_file_list", type=str, default='./data/kitti/test_files_eigen.txt',
+        help="Path to the list of test files")
+    parser.add_argument('--min_depth', type=float, default=1e-3, help="Threshold for minimum depth")
+    parser.add_argument('--max_depth', type=float, default=80, help="Threshold for maximum depth")
+    args = parser.parse_args()
+    return args
 
-def main():
+def main(args, logger=None):
     test_files = read_text_lines(args.test_file_list)
     gt_files, gt_calib, im_sizes, im_files, cams = \
         read_file_data(test_files, args.kitti_dir)
@@ -75,7 +77,13 @@ def main():
         abs_rel[i], sq_rel[i], rms[i], log_rms[i], a1[i], a2[i], a3[i] = \
             compute_errors(gt_depth[mask], pred_depth[mask])
 
-    print("{:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}".format('abs_rel', 'sq_rel', 'rms', 'log_rms', 'd1_all', 'a1', 'a2', 'a3'))
-    print("{:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}".format(abs_rel.mean(), sq_rel.mean(), rms.mean(), log_rms.mean(), d1_all.mean(), a1.mean(), a2.mean(), a3.mean()))
+    if logger is not None:
+        logger.info("{:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}".format('abs_rel', 'sq_rel', 'rms', 'log_rms', 'd1_all', 'a1', 'a2', 'a3'))
+        logger.info("{:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}".format(abs_rel.mean(), sq_rel.mean(), rms.mean(), log_rms.mean(), d1_all.mean(), a1.mean(), a2.mean(), a3.mean()))
+    else:
+        print("{:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}".format('abs_rel', 'sq_rel', 'rms', 'log_rms', 'd1_all', 'a1', 'a2', 'a3'))
+        print("{:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}".format(abs_rel.mean(), sq_rel.mean(), rms.mean(), log_rms.mean(), d1_all.mean(), a1.mean(), a2.mean(), a3.mean()))
 
-main()
+if __name__ == "__main__":
+    args = create_parser()
+    main(args)

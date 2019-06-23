@@ -68,14 +68,15 @@ class Model(object):
                compute_minimum_loss=True,
                use_skip=True,
                joint_encoder=True,
-               build_sum=False, ##
+               build_sum=True,
                shuffle=True,
                input_file='train',
                handle_motion=False,
                equal_weighting=False,
                size_constraint_weight=0.0,
                train_global_scale_var=True,
-               motion_mask=False):
+               motion_mask=False,
+               num_obj_motion=3):
     self.data_dir = data_dir
     self.ins_data_dir = ins_data_dir
     self.sem_data_dir = sem_data_dir
@@ -112,6 +113,7 @@ class Model(object):
     self.size_constraint_weight = size_constraint_weight
     self.train_global_scale_var = train_global_scale_var
     self.motion_mask = motion_mask
+    self.num_obj_motion = num_obj_motion
 
     logging.info('data_dir: %s', data_dir)
     logging.info('ins_data_dir: %s', ins_data_dir)
@@ -468,7 +470,8 @@ class Model(object):
                     seq_length=self.seq_length,
                     weight_reg=self.weight_reg,
                     use_skip=self.use_skip,
-                    is_training=self.is_training)
+                    is_training=self.is_training,
+                    num_obj_motion=self.num_obj_motion)
                 self.cam_pose[(i,j)] = cam_ego
                 self.obj_pose[(i,j)] = obj_ego
                 self.obj_motion_mask[(i,j)] = multiscale_obj_masks
@@ -648,7 +651,7 @@ class Model(object):
                   # Order of i,j changed due to possible mistake in original code.
                   # TODO: verify this change, i: source frame, j: target frame
                   egomotion_mat_j_i = project.get_transform_mat(
-                        self.egomotion, j, i) # shape=(B, 4, 4)
+                        self.egomotion, i, j) # shape=(B, 4, 4)
                   # Inverse warp the source image to the target image frame for
                   # Photometric consistency loss.
                   self.warped_image[s][key], self.warp_mask[s][key] = (
@@ -666,7 +669,7 @@ class Model(object):
                         self.cam_pose[(j,i)] # shape=(B, 4, 4)
                     )
                   obj_mat_j_i = project.get_transform_mat_obj_motion(
-                        self.obj_pose[(j,i)], num_obj_motion=3
+                        self.obj_pose[(j,i)], num_obj_motion=self.num_obj_motion
                         # shape=(B, num_obj_motion, 4, 4)
                     )
 
@@ -681,7 +684,7 @@ class Model(object):
                             obj_mat_j_i,
                             self.intrinsic_mat[:, selected_scale, :, :],
                             self.intrinsic_mat_inv[:, selected_scale, :, :],
-                            num_obj_motion=3))
+                            num_obj_motion=self.num_obj_motion))
 
 
             # self.warped_image[s][key]: shape=(4, 128, 416, 3) at s=0
@@ -829,13 +832,42 @@ class Model(object):
           tf.summary.histogram('batch%d_rz%d' % (batch_s, i),
                                self.object_transforms[0][batch_s][:, i, 5])
 
-    for i in range(self.seq_length - 1):
-      tf.summary.histogram('tx%d' % i, self.egomotion[:, i, 0])
-      tf.summary.histogram('ty%d' % i, self.egomotion[:, i, 1])
-      tf.summary.histogram('tz%d' % i, self.egomotion[:, i, 2])
-      tf.summary.histogram('rx%d' % i, self.egomotion[:, i, 3])
-      tf.summary.histogram('ry%d' % i, self.egomotion[:, i, 4])
-      tf.summary.histogram('rz%d' % i, self.egomotion[:, i, 5])
+    if not self.motion_mask:
+        for i in range(self.seq_length - 1):
+            tf.summary.histogram('tx%d' % i, self.egomotion[:, i, 0])
+            tf.summary.histogram('ty%d' % i, self.egomotion[:, i, 1])
+            tf.summary.histogram('tz%d' % i, self.egomotion[:, i, 2])
+            tf.summary.histogram('rx%d' % i, self.egomotion[:, i, 3])
+            tf.summary.histogram('ry%d' % i, self.egomotion[:, i, 4])
+            tf.summary.histogram('rz%d' % i, self.egomotion[:, i, 5])
+
+    # for motion masks
+    if self.motion_mask:
+        for i in range(self.seq_length):
+            for j in range(self.seq_length):
+                if (i,j) in self.cam_pose:
+                    cam_ego = self.cam_pose[(i,j)]
+                    key = '%d%d' % (i, j)
+                    tf.summary.histogram('cam_tx%s' % key, cam_ego[:, 0, 0])
+                    tf.summary.histogram('cam_ty%s' % key, cam_ego[:, 0, 1])
+                    tf.summary.histogram('cam_tz%s' % key, cam_ego[:, 0, 2])
+                    tf.summary.histogram('cam_rx%s' % key, cam_ego[:, 0, 3])
+                    tf.summary.histogram('cam_ry%s' % key, cam_ego[:, 0, 4])
+                    tf.summary.histogram('cam_rz%s' % key, cam_ego[:, 0, 5])
+                    obj_ego = self.obj_pose[(i,j)]
+                    for idx in range(self.num_obj_motion):
+                        tf.summary.histogram('cam_tx%s_%d' % (key,idx), obj_ego[:, idx,0, 0])
+                        tf.summary.histogram('cam_ty%s_%d' % (key,idx), obj_ego[:, idx,0, 1])
+                        tf.summary.histogram('cam_tz%s_%d' % (key,idx), obj_ego[:, idx,0, 2])
+                        tf.summary.histogram('cam_rx%s_%d' % (key,idx), obj_ego[:, idx,0, 3])
+                        tf.summary.histogram('cam_ry%s_%d' % (key,idx), obj_ego[:, idx,0, 4])
+                        tf.summary.histogram('cam_rz%s_%d' % (key,idx), obj_ego[:, idx,0, 5])
+                    for s in range(NUM_SCALES):
+                        tf.summary.image(
+                                'scale%d_motion_mask%s' % (s, key),
+                                self.obj_motion_mask[(i,j)][s]
+                            )
+
 
     for s in range(NUM_SCALES):
       for i in range(self.seq_length):
@@ -843,6 +875,7 @@ class Model(object):
                          self.images[s][:, :, :, 3 * i:3 * (i + 1)])
         if i in self.depth:
           tf.summary.histogram('scale%d_depth%d' % (s, i), self.depth[i][s])
+          tf.summary.image('scale%d_depth%d' % (s, i), self.depth[i][s])
           tf.summary.histogram('scale%d_disp%d' % (s, i), self.disp[i][s])
           tf.summary.image('scale%d_disparity%d' % (s, i), self.disp[i][s])
 

@@ -88,7 +88,7 @@ flags.DEFINE_string('imagenet_ckpt', None, 'Initialize the weights according '
                     'architecture to be ResNet-18.')
 flags.DEFINE_string('checkpoint_dir', None, 'Directory to save model '
                     'checkpoints.')
-flags.DEFINE_integer('train_steps', 10000000, 'Number of training steps.')
+flags.DEFINE_integer('train_steps', 200000, 'Number of training steps.')
 flags.DEFINE_integer('summary_freq', 100, 'Save summaries every N steps.')
 flags.DEFINE_bool('depth_upsampling', True, 'Whether to apply depth '
                   'upsampling of lower-scale representations before warping to '
@@ -113,6 +113,8 @@ flags.DEFINE_bool('handle_motion', True, 'Whether to try to handle motion by '
                   'using the provided segmentation masks.')
 flags.DEFINE_bool('motion_mask', False, 'Whether to try the motion mask '
                   'as per SfM-Net paper.')
+flags.DEFINE_integer('num_obj_motion', 3, 'Number of object motion when'
+                    'motion mask is enabled')
 flags.DEFINE_string('master', 'local', 'Location of the session.')
 
 FLAGS = flags.FLAGS
@@ -197,7 +199,8 @@ def main(_):
                             handle_motion=FLAGS.handle_motion,
                             equal_weighting=FLAGS.equal_weighting,
                             size_constraint_weight=FLAGS.size_constraint_weight,
-                            motion_mask=FLAGS.motion_mask)
+                            motion_mask=FLAGS.motion_mask,
+                            num_obj_motion=FLAGS.num_obj_motion)
 
   train(train_model, FLAGS.pretrained_ckpt, FLAGS.imagenet_ckpt,
         FLAGS.checkpoint_dir, FLAGS.train_steps, FLAGS.summary_freq, FLAGS.skip_depth_conv1)

@@ -26,7 +26,7 @@ from eval_depth import main as depth_evaluator
 
 KITTI_DIR="/mnt/1.9TB/kitti_raw/"
 INPUT_FILE=KITTI_DIR+"test_files_eigen.txt"
-INFERENCE="/home/amanraj/codes/struct2depth/inference.py"
+INFERENCE="/media/ehdd_2t/amanraj/struct2depth/inference.py"
 
 def create_logger(args):
     """
@@ -68,6 +68,10 @@ def main_call(args, logger):
     pred_dir = os.path.join(args.checkpoint_dir, "prediction")
 
     for f in files:
+        if args.start_idx is not None and \
+         int(f.split("-")[-1]) < args.start_idx:
+            continue
+
         init_chkp = os.path.join(args.checkpoint_dir, f)
         logger.info("Evaluating for: {}".format(init_chkp))
         out_dir = os.path.join(pred_dir, os.path.basename(f))
@@ -110,6 +114,12 @@ if __name__ == "__main__":
         '--sem_data_dir',
         help='directory containing semantic',
         type=str,
+        default=None
+    )
+    parser.add_argument(
+        '--start_idx',
+        help='starting index of model to run evaluation from',
+        type=int,
         default=None
     )
     args = parser.parse_args()
