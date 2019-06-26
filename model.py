@@ -173,7 +173,8 @@ class Model(object):
       self.build_train_graph()
     else:
       self.build_depth_test_graph()
-      self.build_egomotion_test_graph()
+      if not self.motion_mask:
+          self.build_egomotion_test_graph()
       if self.handle_motion:
         self.build_objectmotion_test_graph()
 

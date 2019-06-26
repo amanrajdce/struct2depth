@@ -94,7 +94,7 @@ def main_call(args, logger):
         eval_args = namedtuple('eval_args', arg_list)
         pass_eval_args = eval_args(INPUT_FILE, KITTI_DIR, out_dir, 1e-3, 80)
         depth_evaluator(pass_eval_args, logger)
-        logger.info("Finished evaluatin")
+        logger.info("Finished evaluation")
 
 
 if __name__ == "__main__":
